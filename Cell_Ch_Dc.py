@@ -24,13 +24,15 @@ if "workflow_logs" not in st.session_state:
     st.session_state.workflow_logs = []
 if "cell_working_conditions" not in st.session_state:
     st.session_state.cell_working_conditions = ["Normal"] * 8
+if "historical_records" not in st.session_state:
+    st.session_state.historical_records = []
 
 # ------------------------------------
 # Sidebar Navigation
 # ------------------------------------
 page = st.sidebar.radio(
     "📁 Navigate",
-    ["Main Monitoring", "Workflow Management", "Configure Cells", "User Controls", "Data Logging", "Real-Time Sensor"],
+    ["Main Monitoring", "Workflow Management", "Configure Cells", "User Controls", "Data Logging", "Records & Comparison", "Real-Time Sensor"],
     format_func=lambda x: f"🔹 {x}",
 )
 
@@ -206,11 +208,11 @@ elif page == "Workflow Management":
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        charge_duration = st.number_input("Charging Duration (minutes)", min_value=1, max_value=1440, value=30)
+        charge_duration = st.number_input("Charging Duration (seconds)", min_value=1, max_value=86400, value=30)
     with col2:
-        idle_duration = st.number_input("Idle Duration (minutes)", min_value=1, max_value=1440, value=15)
+        idle_duration = st.number_input("Idle Duration (seconds)", min_value=1, max_value=86400, value=15)
     with col3:
-        discharge_duration = st.number_input("Discharge Duration (minutes)", min_value=1, max_value=1440, value=20)
+        discharge_duration = st.number_input("Discharge Duration (seconds)", min_value=1, max_value=86400, value=20)
     
     # Cell Working Conditions Configuration
     st.markdown("### 🔧 Set Cell Working Conditions")
@@ -263,21 +265,21 @@ elif page == "Workflow Management":
     if st.session_state.workflow_active and st.session_state.phase_start_time:
         st.markdown("### 📊 Current Workflow Status")
         elapsed_time = datetime.datetime.now() - st.session_state.phase_start_time
-        elapsed_minutes = elapsed_time.total_seconds() / 60
+        elapsed_seconds = elapsed_time.total_seconds()
         
         current_phase = st.session_state.current_phase
         if "workflow_config" in st.session_state:
             config = st.session_state.workflow_config
             
-            if current_phase == "charging" and elapsed_minutes >= config["charge_duration"]:
+            if current_phase == "charging" and elapsed_seconds >= config["charge_duration"]:
                 st.session_state.current_phase = "idle"
                 st.session_state.phase_start_time = datetime.datetime.now()
                 st.rerun()
-            elif current_phase == "idle" and elapsed_minutes >= config["idle_duration"]:
+            elif current_phase == "idle" and elapsed_seconds >= config["idle_duration"]:
                 st.session_state.current_phase = "discharging"
                 st.session_state.phase_start_time = datetime.datetime.now()
                 st.rerun()
-            elif current_phase == "discharging" and elapsed_minutes >= config["discharge_duration"]:
+            elif current_phase == "discharging" and elapsed_seconds >= config["discharge_duration"]:
                 st.session_state.workflow_active = False
                 st.session_state.current_phase = "idle"
                 st.session_state.phase_start_time = None
@@ -286,15 +288,15 @@ elif page == "Workflow Management":
         
         col1, col2, col3 = st.columns(3)
         col1.metric("Current Phase", current_phase.upper())
-        col2.metric("Elapsed Time", f"{int(elapsed_minutes)}m {int(elapsed_time.seconds % 60)}s")
+        col2.metric("Elapsed Time", f"{int(elapsed_seconds)}s")
         
         if "workflow_config" in st.session_state:
             phase_duration = st.session_state.workflow_config.get(f"{current_phase}_duration", 0)
-            remaining = max(0, phase_duration - elapsed_minutes)
-            col3.metric("Time Remaining", f"{int(remaining)}m")
+            remaining = max(0, phase_duration - elapsed_seconds)
+            col3.metric("Time Remaining", f"{int(remaining)}s")
             
             # Progress bar
-            progress = min(1.0, elapsed_minutes / phase_duration) if phase_duration > 0 else 0
+            progress = min(1.0, elapsed_seconds / phase_duration) if phase_duration > 0 else 0
             st.progress(progress, f"Phase Progress: {progress*100:.0f}%")
     
     # Workflow Logs Display
@@ -414,12 +416,20 @@ elif page == "Data Logging":
         
         # Auto-save every few seconds (simulated)
         if len(st.session_state.workflow_logs) == 0 or \
-           (datetime.datetime.now() - datetime.datetime.fromisoformat(st.session_state.workflow_logs[-1]["timestamp"])).seconds > 10:
+           (datetime.datetime.now() - datetime.datetime.fromisoformat(st.session_state.workflow_logs[-1]["timestamp"])).seconds > 5:
             st.session_state.workflow_logs.append({
                 "timestamp": datetime.datetime.now().isoformat(),
                 "phase": st.session_state.current_phase,
                 "message": f"Auto-logged data during {st.session_state.current_phase} phase"
             })
+            
+            # Store detailed records for comparison
+            record_entry = {
+                "Timestamp": datetime.datetime.now().isoformat(),
+                "Phase": st.session_state.current_phase,
+                **{f"Cell_{i+1}_{key}": value for i in range(8) for key, value in current_data[f"Cell_{i+1}"].items()}
+            }
+            st.session_state.historical_records.append(record_entry)
 
     # Display current session data
     log_data = {
@@ -486,6 +496,210 @@ elif page == "Data Logging":
                 "application/json"
             )
             st.success("🗂️ Complete dataset ready!")
+
+# ------------------------------------
+# NEW: Records & Comparison
+# ------------------------------------
+elif page == "Records & Comparison":
+    st.subheader("📊 Historical Records & Cell Comparison")
+    
+    # Records Section
+    st.markdown("### 📋 Historical Records")
+    
+    if st.session_state.historical_records:
+        # Display record count and latest record info
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Records", len(st.session_state.historical_records))
+        col2.metric("Latest Phase", st.session_state.historical_records[-1]["Phase"].upper())
+        
+        latest_time = datetime.datetime.fromisoformat(st.session_state.historical_records[-1]["Timestamp"])
+        col3.metric("Last Updated", latest_time.strftime("%H:%M:%S"))
+        
+        # Filter options
+        st.markdown("#### 🔍 Filter Records")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            phase_filter = st.selectbox("Filter by Phase", ["All", "Charging", "Idle", "Discharging"])
+        with col2:
+            records_limit = st.number_input("Show Last N Records", min_value=1, max_value=len(st.session_state.historical_records), value=min(50, len(st.session_state.historical_records)))
+        with col3:
+            sort_order = st.selectbox("Sort Order", ["Newest First", "Oldest First"])
+        
+        # Filter and sort records
+        filtered_records = st.session_state.historical_records.copy()
+        
+        if phase_filter != "All":
+            filtered_records = [r for r in filtered_records if r["Phase"].lower() == phase_filter.lower()]
+        
+        if sort_order == "Newest First":
+            filtered_records = sorted(filtered_records, key=lambda x: x["Timestamp"], reverse=True)
+        else:
+            filtered_records = sorted(filtered_records, key=lambda x: x["Timestamp"])
+        
+        # Limit records
+        displayed_records = filtered_records[:records_limit]
+        
+        # Convert to DataFrame for display
+        if displayed_records:
+            df_records = pd.DataFrame(displayed_records)
+            st.dataframe(df_records, use_container_width=True)
+            
+            # Download all records
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("📥 Download Filtered Records"):
+                    csv_data = df_records.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download CSV",
+                        csv_data,
+                        f"filtered_records_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        "text/csv",
+                        key="download_filtered"
+                    )
+                    st.success("✅ Filtered records ready for download!")
+            
+            with col2:
+                if st.button("📥 Download All Records"):
+                    all_records_df = pd.DataFrame(st.session_state.historical_records)
+                    csv_all = all_records_df.to_csv(index=False)
+                    st.download_button(
+                        "📥 Download All CSV",
+                        csv_all,
+                        f"all_records_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                        "text/csv",
+                        key="download_all"
+                    )
+                    st.success("✅ All records ready for download!")
+        else:
+            st.info("No records match the selected filters.")
+    else:
+        st.info("🔄 No historical records yet. Start a workflow to begin collecting data.")
+    
+    st.markdown("---")
+    
+    # Cell Comparison Section
+    st.markdown("### 🔄 Cell Parameter Comparison")
+    
+    if st.session_state.historical_records:
+        # Comparison configuration
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("#### Select Cells to Compare")
+            selected_cells = []
+            cell_options = [f"Cell_{i+1}" for i in range(8)]
+            
+            cols = st.columns(4)
+            for i, cell in enumerate(cell_options):
+                with cols[i % 4]:
+                    if st.checkbox(f"Cell {i+1}", key=f"compare_cell_{i}"):
+                        selected_cells.append(cell)
+        
+        with col2:
+            st.markdown("#### Select Parameters")
+            available_params = ["Voltage (V)", "Current (A)", "Temperature (°C)", "SoC (%)", "SoH (%)", "Capacity (Wh)"]
+            selected_params = st.multiselect("Choose parameters to compare", available_params, default=["Voltage (V)", "Temperature (°C)"])
+        
+        if selected_cells and selected_params:
+            # Get latest records for comparison
+            latest_records = st.session_state.historical_records[-min(10, len(st.session_state.historical_records)):]
+            
+            # Create comparison data
+            comparison_data = {}
+            
+            for record in latest_records:
+                timestamp = record["Timestamp"]
+                phase = record["Phase"]
+                
+                for cell in selected_cells:
+                    for param in selected_params:
+                        key = f"{cell}_{param}"
+                        if key in record:
+                            col_name = f"{cell}_{param}_{phase}"
+                            if col_name not in comparison_data:
+                                comparison_data[col_name] = []
+                            comparison_data[col_name].append({
+                                "Timestamp": timestamp,
+                                "Value": record[key],
+                                "Cell": cell,
+                                "Parameter": param,
+                                "Phase": phase
+                            })
+            
+            if comparison_data:
+                st.markdown("#### 📈 Comparison Charts")
+                
+                # Create comparison charts for each parameter
+                for param in selected_params:
+                    st.markdown(f"##### {param} Comparison")
+                    
+                    # Prepare data for chart
+                    chart_data = {}
+                    for cell in selected_cells:
+                        cell_data = []
+                        for record in latest_records:
+                            key = f"{cell}_{param}"
+                            if key in record:
+                                cell_data.append(record[key])
+                        if cell_data:
+                            chart_data[f"{cell}"] = cell_data
+                    
+                    if chart_data:
+                        df_chart = pd.DataFrame(chart_data)
+                        st.line_chart(df_chart)
+                
+                # Summary statistics
+                st.markdown("#### 📊 Comparison Summary")
+                
+                summary_data = []
+                for cell in selected_cells:
+                    for param in selected_params:
+                        values = []
+                        for record in latest_records:
+                            key = f"{cell}_{param}"
+                            if key in record:
+                                values.append(record[key])
+                        
+                        if values:
+                            summary_data.append({
+                                "Cell": cell,
+                                "Parameter": param,
+                                "Average": round(np.mean(values), 3),
+                                "Min": round(min(values), 3),
+                                "Max": round(max(values), 3),
+                                "Latest": round(values[-1], 3),
+                                "Std Dev": round(np.std(values), 3)
+                            })
+                
+                if summary_data:
+                    df_summary = pd.DataFrame(summary_data)
+                    st.dataframe(df_summary, use_container_width=True)
+                    
+                    # Download comparison data
+                    if st.button("📥 Download Comparison Summary"):
+                        csv_summary = df_summary.to_csv(index=False)
+                        st.download_button(
+                            "📥 Download Comparison CSV",
+                            csv_summary,
+                            f"cell_comparison_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                            "text/csv",
+                            key="download_comparison"
+                        )
+                        st.success("✅ Comparison data ready for download!")
+        else:
+            st.info("👆 Please select at least one cell and one parameter to compare.")
+    else:
+        st.info("🔄 No data available for comparison. Start collecting data first.")
+    
+    # Clear records option
+    st.markdown("---")
+    if st.button("🗑️ Clear All Records", type="secondary"):
+        if st.button("⚠️ Confirm Clear All Records", type="primary"):
+            st.session_state.historical_records = []
+            st.session_state.workflow_logs = []
+            st.success("🗑️ All records cleared!")
+            st.rerun()
 
 # ------------------------------------
 # Real-Time Sensor (Enhanced)
